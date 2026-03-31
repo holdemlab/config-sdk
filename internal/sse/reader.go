@@ -1,9 +1,10 @@
+// Package sse provides a lightweight Server-Sent Events (SSE) reader.
 package sse
 
 import (
-"bufio"
-"io"
-"strings"
+	"bufio"
+	"io"
+	"strings"
 )
 
 // Event represents a single SSE event.

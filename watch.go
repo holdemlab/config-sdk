@@ -34,11 +34,12 @@ func (c *Client) Watch(ctx context.Context, configName string, callback WatchCal
 
 	for {
 		err := c.watchOnce(watchCtx, url, callback)
-		if err == nil {
+		switch {
+		case err == nil:
 			// Stream ended normally (server closed); reconnect
-		} else if watchCtx.Err() != nil {
+		case watchCtx.Err() != nil:
 			return watchCtx.Err()
-		} else {
+		default:
 			c.log().Warn("watch connection lost, reconnecting",
 				"config", configName,
 				"error", err,
@@ -59,7 +60,7 @@ func (c *Client) Watch(ctx context.Context, configName string, callback WatchCal
 
 // watchOnce opens a single SSE connection and processes events until the stream ends or an error occurs.
 func (c *Client) watchOnce(ctx context.Context, url string, callback WatchCallback) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
@@ -70,7 +71,7 @@ func (c *Client) watchOnce(ctx context.Context, url string, callback WatchCallba
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := mapStatusError(resp.StatusCode); err != nil {
 		return err
@@ -122,7 +123,7 @@ func (c *Client) WatchAndDecode(ctx context.Context, configName string, dst inte
 
 	var mu sync.RWMutex
 
-	return c.Watch(ctx, configName, func(event ConfigChangeEvent) {
+	return c.Watch(ctx, configName, func(_ ConfigChangeEvent) {
 		// Create a new instance of the same type as dst points to
 		newVal := reflect.New(dstVal.Elem().Type()).Interface()
 

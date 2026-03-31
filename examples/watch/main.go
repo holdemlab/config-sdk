@@ -1,14 +1,14 @@
 package main
 
 import (
-"context"
-"fmt"
-"log"
-"os"
-"os/signal"
-"syscall"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
-configsdk "github.com/holdemlab/config-sdk"
+	configsdk "github.com/holdemlab/config-sdk"
 )
 
 type Config struct {
@@ -25,14 +25,14 @@ type Config struct {
 
 func main() {
 	client, err := configsdk.New(configsdk.Options{
-Host:          os.Getenv("CONFIG_SERVICE_HOST"),
-ServiceToken:  os.Getenv("CONFIG_SERVICE_TOKEN"),
-EncryptionKey: os.Getenv("CONFIG_SERVICE_KEY"),
-})
+		Host:          os.Getenv("CONFIG_SERVICE_HOST"),
+		ServiceToken:  os.Getenv("CONFIG_SERVICE_TOKEN"),
+		EncryptionKey: os.Getenv("CONFIG_SERVICE_KEY"),
+	})
 	if err != nil {
 		log.Fatalf("config client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Load initial configuration
 	var cfg Config

@@ -53,7 +53,7 @@ func (c *Client) executeRequest(ctx context.Context, method, url string) ([]byte
 	ctx, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, http.NoBody)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
@@ -64,7 +64,7 @@ func (c *Client) executeRequest(ctx context.Context, method, url string) ([]byte
 	if err != nil {
 		return nil, nil, &retriableError{err: fmt.Errorf("%w: %v", ErrConnectionFailed, err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

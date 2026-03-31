@@ -1,7 +1,6 @@
 package configsdk
 
 import (
-	"os"
 	"testing"
 	"time"
 )
@@ -141,9 +140,9 @@ func TestNewFromEnv_Success(t *testing.T) {
 
 func TestNewFromEnv_MissingVars(t *testing.T) {
 	// Ensure env vars are not set.
-	os.Unsetenv("CONFIG_SERVICE_HOST")
-	os.Unsetenv("CONFIG_SERVICE_TOKEN")
-	os.Unsetenv("CONFIG_SERVICE_KEY")
+	t.Setenv("CONFIG_SERVICE_HOST", "")
+	t.Setenv("CONFIG_SERVICE_TOKEN", "")
+	t.Setenv("CONFIG_SERVICE_KEY", "")
 
 	_, err := NewFromEnv()
 	if err == nil {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func encrypt(plaintext []byte, key []byte) ([]byte, error) {
+func encrypt(plaintext, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

@@ -1,24 +1,25 @@
+// Package main demonstrates GetFormatted usage of the config-sdk.
 package main
 
 import (
-"context"
-"fmt"
-"log"
-"os"
+	"context"
+	"fmt"
+	"log"
+	"os"
 
-configsdk "github.com/holdemlab/config-sdk"
+	configsdk "github.com/holdemlab/config-sdk"
 )
 
 func main() {
 	client, err := configsdk.New(configsdk.Options{
-Host:          os.Getenv("CONFIG_SERVICE_HOST"),
-ServiceToken:  os.Getenv("CONFIG_SERVICE_TOKEN"),
-EncryptionKey: os.Getenv("CONFIG_SERVICE_KEY"),
-})
+		Host:          os.Getenv("CONFIG_SERVICE_HOST"),
+		ServiceToken:  os.Getenv("CONFIG_SERVICE_TOKEN"),
+		EncryptionKey: os.Getenv("CONFIG_SERVICE_KEY"),
+	})
 	if err != nil {
 		log.Fatalf("config client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 

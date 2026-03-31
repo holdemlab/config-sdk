@@ -1,0 +1,23 @@
+# IDE
+.vscode/**
+.idea/**
+
+# Vendor / binaries
+vendor/**
+bin/**
+dist/**
+
+# Secrets
+.env
+.env.*
+
+# Logs
+logs/**
+
+# Coverage
+coverage/**
+*.out
+
+# Documentation
+ROADMAP.md
+TZ-GO-SDK.md

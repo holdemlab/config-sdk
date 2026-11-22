@@ -81,9 +81,9 @@ make integration
 
 Проєкт дотримується [Conventional Commits](https://www.conventionalcommits.org/)
 не лише для читабельної історії, а й тому, що **типи комітів напряму
-керують автотегуванням** (CI job `auto-tag`, розділ 7): кожен push у `master`
-створює SemVer-тег і GitHub Release, а тип коміту визначає, яка частина
-версії підніметься.
+керують автотегуванням** (CI job `auto-tag`, розділ 7): тип коміту в `master`
+визначає, чи буде новий SemVer-тег і GitHub Release, і яка частина версії
+підніметься.
 
 ### Таблиця префіксів
 
@@ -97,7 +97,7 @@ make integration
 | `test:`                     | Додавання або зміна тестів                |
 | `chore:`                    | Службові зміни (CI, інструменти)          |
 | `perf:`                     | Оптимізація продуктивності                |
-| footer `BREAKING CHANGE:` (+ `!`) | Зламна зміна публічного API/поведінки |
+| `!` або footer `BREAKING CHANGE:` | Зламна зміна публічного API/поведінки |
 
 Типові скоупи: `client`, `transport`, `get`, `watch`, `sse`, `crypto`,
 `snapshot`, `examples`, `ci`, `docs`.
@@ -121,8 +121,9 @@ SDK — публічна бібліотека, тож зламною вважа�
 **wire-формат AES-GCM** (`nonce || ciphertext || tag`, без AAD): його
 змінювати можна лише синхронно із сервером.
 
-Позначаються **обов'язково footer-ом** `BREAKING CHANGE:` у тілі коміту
-(після порожнього рядка), а для наочності — ще й `!` після типу/скоупу:
+Позначаються **знаком оклику** після типу/скоупу та/або **footer-ом**
+`BREAKING CHANGE:` у тілі коміту (після порожнього рядка) — major дає будь-що
+з двох. Рекомендовано обидва, footer пояснює, що саме зламано:
 
 ```
 fix(client)!: require https for non-loopback hosts
@@ -131,10 +132,22 @@ BREAKING CHANGE: New rejects plain-http Host unless it is loopback
 or Options.AllowInsecureHTTP is set
 ```
 
-> ⚠️ **Major-версію піднімає тільки footer.** `auto-tag`
-> (`mathieudutour/github-tag-action`, правила Angular) не розпізнає `!` у
-> заголовку як зламну зміну: `fix!: …` без footer дасть **patch**,
-> `feat!: …` — **minor**. Сам `!` — лише позначка для людей.
+### Major ≥ 2 = новий шлях модуля `/vN`
+
+Go вимагає, щоб для версій v2+ шлях модуля закінчувався суфіксом major-версії
+(`github.com/holdemlab/config-sdk/v2`), інакше `go get` відкидає тег як
+невалідний. Тому PR зі зламною зміною **в тому ж PR** має:
+
+- змінити `module` у `go.mod` на `.../config-sdk/vN`;
+- оновити всі імпорти (`internal/sse`, `examples/`, README).
+
+`auto-tag` перевіряє це сам і **падає**, якщо обчислений major не збігається
+з суфіксом у `go.mod` — тег і реліз тоді не створюються.
+
+> ⚠️ Не відкривайте PR з гілки, коміти якої вже потрапили в `master`
+> (наприклад, повторний PR зі старої гілки після squash-merge). Squash-коміт
+> скопіює їхні повідомлення разом зі старим `BREAKING CHANGE:` — і `auto-tag`
+> вдруге підніме major. Нова робота — нова гілка від свіжого `master`.
 
 ---
 
@@ -269,20 +282,31 @@ gofmt -l . && make lint && make vet && make test && make coverage
 
 ### Автотегування (`auto-tag`)
 
-Після push у `master` (зокрема merge PR) job `auto-tag` автоматично, **без
-ручних дій**:
+Після push у `master` (зокрема merge PR) job `auto-tag`
+([scripts/auto-tag.sh](scripts/auto-tag.sh)) автоматично, **без ручних дій**:
 
-- рахує bump за Conventional Commits від останнього тега `vX.Y.Z`:
-  `feat` → minor, `fix`/`perf`/`revert` → patch, footer `BREAKING CHANGE:`
-  → major (`!` у заголовку без footer major **не** дає, див. розділ 3);
-- коміти інших типів (`docs`, `chore`, …) теж дають **patch**
-  (`default_bump: patch`), тобто **кожен** push у `master` створює новий тег;
-- пушить тег і в тому ж job-і створює GitHub Release з автоматично
-  згенерованими нотатками.
+- рахує bump за заголовками й тілами комітів від останнього тега `vX.Y.Z`:
+  `type!:` або footer `BREAKING CHANGE:` → major, `feat` → minor,
+  `fix`/`perf`/`revert` → patch;
+- якщо з останнього тега були лише інші типи (`docs`, `style`, `refactor`,
+  `test`, `chore`, `ci`) або коміти без Conventional-префікса —
+  **нічого не тегує**;
+- перевіряє, що major збігається з суфіксом `/vN` у `go.mod` (розділ 3),
+  інакше job падає;
+- створює тег і GitHub Release (з автоматично згенерованими нотатками) одним
+  викликом `gh release create`.
 
-Release створюється саме в `auto-tag`, бо тег, запушений через
+Перевірити, який тег вийде, можна локально (нічого не створює):
+
+```bash
+git fetch --tags && DRY_RUN=1 sh scripts/auto-tag.sh
+```
+
+Release створюється саме в `auto-tag`, бо тег, створений через
 `GITHUB_TOKEN`, не запускає інші workflow. [release.yml](.github/workflows/release.yml)
 спрацьовує лише на теги, запушені вручну (тести + `go mod verify` + Release).
 
 **Тому конвенція комітів (розділ 3) — не стиль-гайд, а частина релізного
-процесу**: невірний тип коміту в `master` означає невірну версію релізу.
+процесу**: невірний тип коміту в `master` означає невірну версію релізу,
+а реальний фікс без префікса `fix:` (наприклад, squash-merge з назвою PR
+на кшталт «Security review») не створить релізу взагалі.

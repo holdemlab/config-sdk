@@ -99,10 +99,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           default_bump: patch
           tag_prefix: v
-          # Conventional Commits mapping:
-          #   feat  → minor
-          #   fix   → patch
-          #   BREAKING CHANGE / feat! / fix! → major
+          # Angular release rules (commit-analyzer defaults):
+          #   feat → minor; fix / perf / revert → patch
+          #   "BREAKING CHANGE:" footer → major ("!" in the header alone is NOT major)
+          #   anything else → default_bump (patch)
           release_branches: master
       # Tags pushed with GITHUB_TOKEN do not trigger other workflows (release.yml),
       # so the release is created here. release.yml still handles manually pushed tags.

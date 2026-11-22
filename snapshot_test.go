@@ -1,8 +1,8 @@
 package configsdk
 
 import (
-"sync"
-"testing"
+	"sync"
+	"testing"
 )
 
 func TestSnapshot_StoreAndLoad(t *testing.T) {

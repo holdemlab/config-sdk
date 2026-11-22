@@ -1,6 +1,6 @@
 # IDE
-.vscode/**
-.idea/**
+.*/
+!.github/
 
 # Vendor / binaries
 vendor/**
@@ -10,6 +10,7 @@ dist/**
 # Secrets
 .env
 .env.*
+!.env.example
 
 # Logs
 logs/**
@@ -18,6 +19,7 @@ logs/**
 coverage/**
 *.out
 
-# Documentation
-ROADMAP.md
-TZ-GO-SDK.md
+*.md
+!CONTRIBUTING.md
+!README.md
+

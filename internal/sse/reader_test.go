@@ -1,9 +1,11 @@
 package sse
 
 import (
-"io"
-"strings"
-"testing"
+	"bufio"
+	"errors"
+	"io"
+	"strings"
+	"testing"
 )
 
 func TestNext_SingleEvent(t *testing.T) {
@@ -158,5 +160,51 @@ func TestNext_MultipleBlankLines(t *testing.T) {
 	}
 	if ev.Data != "after-blanks" {
 		t.Errorf("Data = %q, want %q", ev.Data, "after-blanks")
+	}
+}
+
+func TestNext_EventSizeLimit(t *testing.T) {
+	// Many data lines, each well under the 64 KiB line limit; the joined size
+	// is the sum of line lengths plus one newline between lines.
+	build := func(total int) string {
+		const lineLen = 50000
+		var sb strings.Builder
+		for rem := total; rem > 0; {
+			n := min(lineLen, rem)
+			sb.WriteString("data: " + strings.Repeat("a", n) + "\n")
+			rem -= n + 1 // line bytes plus the joining newline
+		}
+		return sb.String() + "\n"
+	}
+
+	ev, err := NewReader(strings.NewReader(build(MaxEventBytes))).Next()
+	if err != nil {
+		t.Fatalf("exact limit: %v", err)
+	}
+	if len(ev.Data) != MaxEventBytes {
+		t.Errorf("len = %d, want %d", len(ev.Data), MaxEventBytes)
+	}
+
+	_, err = NewReader(strings.NewReader(build(MaxEventBytes + 1))).Next()
+	if !errors.Is(err, ErrEventTooLarge) {
+		t.Fatalf("got %v, want ErrEventTooLarge", err)
+	}
+}
+
+func TestNext_LongLine(t *testing.T) {
+	_, err := NewReader(strings.NewReader("data: " + strings.Repeat("x", 70000) + "\n\n")).Next()
+	if !errors.Is(err, ErrEventTooLarge) || !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("got %v, want both ErrEventTooLarge and bufio.ErrTooLong", err)
+	}
+}
+
+func TestNext_ManyCommentsNotCapped(t *testing.T) {
+	stream := strings.Repeat(": "+strings.Repeat("c", 1000)+"\n", 3000) + "data: ok\n\n"
+	ev, err := NewReader(strings.NewReader(stream)).Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if ev.Data != "ok" {
+		t.Errorf("Data = %q", ev.Data)
 	}
 }

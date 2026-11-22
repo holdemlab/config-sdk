@@ -233,3 +233,81 @@ func TestDoRequest_Timeout(t *testing.T) {
 		t.Fatal("expected timeout error")
 	}
 }
+
+func TestNoRedirect_TokenNotForwarded(t *testing.T) {
+	var hitsB, hitsA int32
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hitsB, 1)
+	}))
+	defer b.Close()
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hitsA, 1)
+		http.Redirect(w, r, b.URL, http.StatusFound)
+	}))
+	defer a.Close()
+
+	c, err := New(Options{Host: a.URL, ServiceToken: "secret", EncryptionKey: testKeyHex, RetryCount: 3, RetryDelay: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.GetFormatted(context.Background(), "app", FormatJSON)
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("got %v, want ErrInvalidResponse", err)
+	}
+	if n := atomic.LoadInt32(&hitsB); n != 0 {
+		t.Fatalf("redirect target hit %d times", n)
+	}
+	if n := atomic.LoadInt32(&hitsA); n != 1 {
+		t.Fatalf("origin hit %d times, want 1 (no retry)", n)
+	}
+}
+
+func bigBodyClient(t *testing.T, size int, status int, hits *int32) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(hits, 1)
+		w.WriteHeader(status)
+		_, _ = w.Write(make([]byte, size))
+	}))
+	t.Cleanup(srv.Close)
+	return &Client{
+		host: srv.URL, serviceToken: "t", httpClient: srv.Client(),
+		requestTimeout: 30 * time.Second, retryCount: 3, retryDelay: time.Millisecond,
+	}
+}
+
+func TestDoRequest_BodyAtLimit(t *testing.T) {
+	var hits int32
+	c := bigBodyClient(t, maxResponseBytes, http.StatusOK, &hits)
+	body, _, err := c.doRequest(context.Background(), "GET", "/x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(body) != maxResponseBytes {
+		t.Fatalf("len = %d, want %d", len(body), maxResponseBytes)
+	}
+}
+
+func TestDoRequest_BodyTooLarge(t *testing.T) {
+	var hits int32
+	c := bigBodyClient(t, maxResponseBytes+1, http.StatusOK, &hits)
+	_, _, err := c.doRequest(context.Background(), "GET", "/x")
+	if !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("got %v, want ErrResponseTooLarge", err)
+	}
+	if errors.Is(err, ErrConnectionFailed) {
+		t.Fatal("must not be ErrConnectionFailed")
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("hits = %d, want 1 (non-retriable)", n)
+	}
+}
+
+func TestDoRequest_StatusWinsOverSize(t *testing.T) {
+	var hits int32
+	c := bigBodyClient(t, maxResponseBytes+1, http.StatusUnauthorized, &hits)
+	_, _, err := c.doRequest(context.Background(), "GET", "/x")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+}

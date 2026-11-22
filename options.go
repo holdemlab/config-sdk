@@ -10,6 +10,8 @@ const (
 	defaultRequestTimeout = 10 * time.Second
 	defaultRetryCount     = 3
 	defaultRetryDelay     = 1 * time.Second
+
+	defaultWatchIdleTimeout = 5 * time.Minute
 )
 
 // Options contains the configuration for connecting to Config Service.
@@ -24,6 +26,7 @@ type Options struct {
 	EncryptionKey string
 
 	// HTTPClient is an optional custom HTTP client. Defaults to http.DefaultClient.
+	// It is copied (never mutated) and redirects are never followed.
 	HTTPClient *http.Client
 
 	// RequestTimeout is the timeout for individual HTTP requests. Default: 10s.
@@ -43,6 +46,14 @@ type Options struct {
 
 	// OnChange is called when a configuration changes in watch mode. Optional.
 	OnChange func(configName string)
+
+	// AllowInsecureHTTP permits a plain-http Host that is not loopback. Default: false.
+	AllowInsecureHTTP bool
+
+	// WatchIdleTimeout is the maximum time Watch waits for response headers or for
+	// any bytes on the SSE stream before reconnecting.
+	// 0 = default (5m). Negative = disabled.
+	WatchIdleTimeout time.Duration
 }
 
 func (o *Options) applyDefaults() {
@@ -57,5 +68,8 @@ func (o *Options) applyDefaults() {
 	}
 	if o.RetryDelay <= 0 {
 		o.RetryDelay = defaultRetryDelay
+	}
+	if o.WatchIdleTimeout == 0 {
+		o.WatchIdleTimeout = defaultWatchIdleTimeout
 	}
 }

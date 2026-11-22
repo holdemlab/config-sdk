@@ -3,9 +3,18 @@ package sse
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
+
+// MaxEventBytes is the maximum size of the joined data of a single event.
+const MaxEventBytes = 1 << 20
+
+// ErrEventTooLarge is returned when an event (or a single line) exceeds the size limit.
+// The Reader must not be used after it returns this error.
+var ErrEventTooLarge = errors.New("sse: event too large")
 
 // Event represents a single SSE event.
 type Event struct {
@@ -28,6 +37,7 @@ func NewReader(r io.Reader) *Reader {
 func (r *Reader) Next() (Event, error) {
 	var eventType string
 	var data []string
+	size := 0
 
 	for r.scanner.Scan() {
 		line := r.scanner.Text()
@@ -56,11 +66,21 @@ func (r *Reader) Next() (Event, error) {
 		case "event":
 			eventType = value
 		case "data":
+			size += len(value)
+			if len(data) > 0 {
+				size++
+			}
+			if size > MaxEventBytes {
+				return Event{}, ErrEventTooLarge
+			}
 			data = append(data, value)
 		}
 	}
 
 	if err := r.scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return Event{}, fmt.Errorf("%w: %w", ErrEventTooLarge, err)
+		}
 		return Event{}, err
 	}
 

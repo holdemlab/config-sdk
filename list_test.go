@@ -1,22 +1,22 @@
 package configsdk
 
 import (
-"context"
-"errors"
-"net/http"
-"net/http/httptest"
-"testing"
-"time"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 )
 
 func TestList_Success(t *testing.T) {
 	response := `[{"name":"db","is_valid":true,"valid_from":"2025-01-01T00:00:00Z","updated_at":"2025-06-15T12:00:00Z"},{"name":"cache","is_valid":false,"valid_from":"2025-02-01T00:00:00Z","updated_at":"2025-06-10T08:00:00Z"}]`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-if r.URL.Path != "/api/v1/service/configs" {
-t.Errorf("path = %q, want /api/v1/service/configs", r.URL.Path)
-}
-if got := r.Header.Get("X-Service-Token"); got != "test-token" {
+		if r.URL.Path != "/api/v1/service/configs" {
+			t.Errorf("path = %q, want /api/v1/service/configs", r.URL.Path)
+		}
+		if got := r.Header.Get("X-Service-Token"); got != "test-token" {
 			t.Errorf("X-Service-Token = %q, want %q", got, "test-token")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -26,10 +26,10 @@ if got := r.Header.Get("X-Service-Token"); got != "test-token" {
 	defer srv.Close()
 
 	client, _ := New(Options{
-Host:          srv.URL,
-ServiceToken:  "test-token",
-EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-HTTPClient:    srv.Client(),
+		Host:          srv.URL,
+		ServiceToken:  "test-token",
+		EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		HTTPClient:    srv.Client(),
 	})
 
 	configs, err := client.List(context.Background())
@@ -57,16 +57,16 @@ HTTPClient:    srv.Client(),
 
 func TestList_EmptyList(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-w.WriteHeader(http.StatusOK)
-w.Write([]byte("[]"))
-}))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
 	defer srv.Close()
 
 	client, _ := New(Options{
-Host:          srv.URL,
-ServiceToken:  "token",
-EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-HTTPClient:    srv.Client(),
+		Host:          srv.URL,
+		ServiceToken:  "token",
+		EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		HTTPClient:    srv.Client(),
 	})
 
 	configs, err := client.List(context.Background())
@@ -80,15 +80,15 @@ HTTPClient:    srv.Client(),
 
 func TestList_Unauthorized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-w.WriteHeader(http.StatusUnauthorized)
-}))
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
 	defer srv.Close()
 
 	client, _ := New(Options{
-Host:          srv.URL,
-ServiceToken:  "bad-token",
-EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-HTTPClient:    srv.Client(),
+		Host:          srv.URL,
+		ServiceToken:  "bad-token",
+		EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		HTTPClient:    srv.Client(),
 	})
 
 	_, err := client.List(context.Background())
@@ -99,16 +99,16 @@ HTTPClient:    srv.Client(),
 
 func TestList_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-w.WriteHeader(http.StatusOK)
-w.Write([]byte("not json"))
-}))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not json"))
+	}))
 	defer srv.Close()
 
 	client, _ := New(Options{
-Host:          srv.URL,
-ServiceToken:  "token",
-EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-HTTPClient:    srv.Client(),
+		Host:          srv.URL,
+		ServiceToken:  "token",
+		EncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		HTTPClient:    srv.Client(),
 	})
 
 	_, err := client.List(context.Background())
@@ -119,15 +119,15 @@ HTTPClient:    srv.Client(),
 
 func TestList_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-w.WriteHeader(http.StatusInternalServerError)
-}))
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
 	defer srv.Close()
 
 	client, _ := New(Options{
-Host:           srv.URL,
-ServiceToken:   "token",
-EncryptionKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-HTTPClient:     srv.Client(),
+		Host:           srv.URL,
+		ServiceToken:   "token",
+		EncryptionKey:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		HTTPClient:     srv.Client(),
 		RetryCount:     1,
 		RetryDelay:     time.Millisecond,
 		RequestTimeout: 5 * time.Second,

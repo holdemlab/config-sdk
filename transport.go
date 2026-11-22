@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// maxResponseBytes is the maximum accepted size of a non-SSE response body.
+const maxResponseBytes = 10 << 20
+
 // doRequest performs an HTTP request with retry logic, auth headers, and error mapping.
 // It retries on 5xx and network errors with exponential backoff + jitter.
 // It does NOT retry on 4xx (client errors).
@@ -66,13 +69,17 @@ func (c *Client) executeRequest(ctx context.Context, method, url string) ([]byte
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, nil, &retriableError{err: fmt.Errorf("%w: %v", ErrConnectionFailed, err)}
 	}
 
 	if err := mapStatusError(resp.StatusCode); err != nil {
 		return nil, nil, err
+	}
+
+	if len(body) > maxResponseBytes {
+		return nil, nil, fmt.Errorf("%w: body exceeds %d bytes", ErrResponseTooLarge, maxResponseBytes)
 	}
 
 	return body, resp.Header, nil
@@ -89,6 +96,8 @@ func mapStatusError(code int) error {
 		return ErrForbidden
 	case code == http.StatusNotFound:
 		return ErrNotFound
+	case code >= 300 && code < 400:
+		return fmt.Errorf("%w: unexpected redirect (HTTP %d), redirects are not followed", ErrInvalidResponse, code)
 	case code >= 400 && code < 500:
 		return fmt.Errorf("%w: HTTP %d", ErrInvalidResponse, code)
 	default:

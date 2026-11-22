@@ -22,6 +22,12 @@ var (
 	// ErrConnectionFailed indicates a failure to connect to Config Service (HTTP 5xx or network error).
 	ErrConnectionFailed = errors.New("configsdk: connection failed")
 
+	// ErrInsecureHost indicates a non-https Host that is not allowed.
+	ErrInsecureHost = errors.New("configsdk: Host must use https (plain http is allowed only for loopback hosts or with Options.AllowInsecureHTTP)")
+
+	// ErrResponseTooLarge indicates a response body or SSE event exceeded the size limit.
+	ErrResponseTooLarge = errors.New("configsdk: response too large")
+
 	// ErrUnmarshal indicates a failure to deserialize JSON into the target struct.
 	ErrUnmarshal = errors.New("configsdk: failed to unmarshal config into target struct")
 )

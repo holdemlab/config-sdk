@@ -21,6 +21,9 @@ func TestMapStatusError(t *testing.T) {
 		{"404 Not Found", http.StatusNotFound, ErrNotFound, false},
 		{"400 Bad Request", http.StatusBadRequest, ErrInvalidResponse, false},
 		{"422 Unprocessable", 422, ErrInvalidResponse, false},
+		{"301 Moved", http.StatusMovedPermanently, ErrInvalidResponse, false},
+		{"302 Found", http.StatusFound, ErrInvalidResponse, false},
+		{"307 Temporary Redirect", http.StatusTemporaryRedirect, ErrInvalidResponse, false},
 		{"500 Internal Server Error", http.StatusInternalServerError, ErrConnectionFailed, false},
 		{"502 Bad Gateway", http.StatusBadGateway, ErrConnectionFailed, false},
 		{"503 Service Unavailable", http.StatusServiceUnavailable, ErrConnectionFailed, false},
@@ -40,6 +43,9 @@ func TestMapStatusError(t *testing.T) {
 			}
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+			if tt.code >= 300 && tt.code < 400 && isRetriable(err) {
+				t.Fatalf("3xx must not be retriable")
 			}
 		})
 	}

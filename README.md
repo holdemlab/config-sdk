@@ -56,7 +56,7 @@ Or initialize from environment variables:
 client, err := configsdk.NewFromEnv()
 ```
 
-Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`.
+Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`, and optionally `CONFIG_SERVICE_ALLOW_INSECURE_HTTP` (`true`/`1` permits a plain-http, non-loopback host).
 
 ## Watch for Changes
 
@@ -64,14 +64,19 @@ Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`.
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
+snap := configsdk.NewSnapshot[Config]()
 go func() {
-    if err := client.WatchAndDecode(ctx, "my-service", &cfg); err != nil {
+    if err := configsdk.WatchSnapshot(ctx, client, "my-service", snap); err != nil {
         log.Printf("watch stopped: %v", err)
     }
 }()
+
+current := snap.Load() // safe from any goroutine
 ```
 
-`WatchAndDecode` subscribes to SSE events and automatically re-fetches and updates the struct. Thread-safe via `sync.RWMutex`.
+`WatchSnapshot` subscribes to SSE events, re-fetches the config on each event and stores it in the `Snapshot` (no initial fetch). `WatchAndDecode` is deprecated and not concurrency-safe: reading `dst` while it runs is a data race.
+
+`Watch` returns the error on 401/403/404 (call it again to keep waiting); other failures reconnect with exponential backoff capped at 30s. If no bytes (including `: ping` comments) arrive for `WatchIdleTimeout` (default 5m, negative disables) the stream is reconnected immediately.
 
 For manual event handling:
 
@@ -124,7 +129,8 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | Method | Description |
 |--------|-------------|
 | `Watch(ctx, name, callback)` | Subscribe to SSE change events |
-| `WatchAndDecode(ctx, name, dst)` | Auto-update struct on changes |
+| `WatchSnapshot(ctx, client, name, snap)` | Auto-update a `Snapshot[T]` on changes |
+| `WatchAndDecode(ctx, name, dst)` | Deprecated: auto-update struct (not concurrency-safe) |
 | `Close()` | Close client and all SSE connections |
 
 ### Types
@@ -150,6 +156,8 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | `ErrInvalidResponse` | Unexpected server response |
 | `ErrConnectionFailed` | Network/5xx errors (after retries) |
 | `ErrUnmarshal` | JSON deserialization failure |
+| `ErrInsecureHost` | Non-https `Host` that is not loopback and `AllowInsecureHTTP` is false |
+| `ErrResponseTooLarge` | Response body over 10 MiB or SSE event over 1 MiB |
 
 ## Configuration Options
 
@@ -158,13 +166,31 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | `Host` | `string` | *required* | Config Service base URL |
 | `ServiceToken` | `string` | *required* | Service authentication token |
 | `EncryptionKey` | `string` | *required* | 64 hex chars (AES-256 key) |
-| `HTTPClient` | `*http.Client` | `http.DefaultClient` | Custom HTTP client |
+| `HTTPClient` | `*http.Client` | `http.DefaultClient` | Custom HTTP client (copied, never mutated; redirects are never followed) |
 | `RequestTimeout` | `time.Duration` | `10s` | Per-request timeout |
 | `RetryCount` | `int` | `3` | Retry attempts for 5xx/network errors |
 | `RetryDelay` | `time.Duration` | `1s` | Base retry delay (exponential backoff) |
 | `Logger` | `*slog.Logger` | `nil` (disabled) | Structured logger |
 | `OnError` | `func(error)` | `nil` | Error callback for watch mode |
 | `OnChange` | `func(string)` | `nil` | Change callback for watch mode |
+| `AllowInsecureHTTP` | `bool` | `false` | Allow plain-http non-loopback `Host` |
+| `WatchIdleTimeout` | `time.Duration` | `5m` | Reconnect watch after this idle time; negative disables |
+
+## Security Notes
+
+- `https` is enforced; plain `http` is allowed only for loopback hosts or with `AllowInsecureHTTP`.
+- Redirects are never followed, so the service token cannot be forwarded to another host.
+- Size limits: 10 MiB per response, 1 MiB per SSE event.
+- Encryption uses no AAD: ciphertexts are not bound to config name or version, so a party that can tamper with responses can substitute another ciphertext encrypted under the same key (fixing this needs a server change).
+- Events can be missed across watch reconnects (no replay).
+
+## Upgrading
+
+- Non-https non-loopback `Host` is now rejected (`ErrInsecureHost`); set `AllowInsecureHTTP` to opt out.
+- Redirects are no longer followed; a 3xx yields `ErrInvalidResponse`. Your `HTTPClient` is copied and its `CheckRedirect` overridden.
+- `Watch` now returns on 401/403/404 instead of retrying forever.
+- Watch reconnects use exponential backoff (cap 30s) and an idle timeout (default 5m).
+- Minimum Go version is 1.26.
 
 ## Examples
 
@@ -176,7 +202,7 @@ See the [examples/](examples/) directory:
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.26+
 - No external dependencies
 
 ## License

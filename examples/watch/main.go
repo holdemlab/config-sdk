@@ -41,12 +41,15 @@ func main() {
 	}
 	fmt.Printf("Initial config: cache=%v, metrics=%v\n", cfg.Features.EnableCache, cfg.Features.EnableMetrics)
 
-	// Watch for changes — automatically updates cfg
+	// Watch for changes — snap.Load() always returns the latest config
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	snap := configsdk.NewSnapshot[Config]()
+	snap.Store(cfg)
+
 	go func() {
-		if err := client.WatchAndDecode(ctx, "my-service", &cfg); err != nil {
+		if err := configsdk.WatchSnapshot(ctx, client, "my-service", snap); err != nil {
 			log.Printf("watch stopped: %v", err)
 		}
 	}()

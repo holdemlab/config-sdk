@@ -779,7 +779,7 @@ func TestWatch_ParseFailureDoesNotLogData(t *testing.T) {
 }
 
 func TestWatchBackoffDelay(t *testing.T) {
-	const cap = 30 * time.Second
+	const maxDelay = 30 * time.Second
 	tests := []struct {
 		retryDelay time.Duration
 		n          int
@@ -790,9 +790,9 @@ func TestWatchBackoffDelay(t *testing.T) {
 		{time.Second, 1, time.Second, 1500 * time.Millisecond},
 		{time.Second, 2, 2 * time.Second, 3 * time.Second},
 		{time.Second, 5, 16 * time.Second, 24 * time.Second},
-		{time.Second, 6, cap, cap},
-		{time.Second, 1_000_000, cap, cap},
-		{time.Minute, 1, cap, cap},
+		{time.Second, 6, maxDelay, maxDelay},
+		{time.Second, 1_000_000, maxDelay, maxDelay},
+		{time.Minute, 1, maxDelay, maxDelay},
 	}
 	for _, tt := range tests {
 		c := &Client{retryDelay: tt.retryDelay}

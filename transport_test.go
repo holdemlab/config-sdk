@@ -262,7 +262,7 @@ func TestNoRedirect_TokenNotForwarded(t *testing.T) {
 	}
 }
 
-func bigBodyClient(t *testing.T, size int, status int, hits *int32) *Client {
+func bigBodyClient(t *testing.T, size, status int, hits *int32) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(hits, 1)

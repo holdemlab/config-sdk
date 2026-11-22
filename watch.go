@@ -114,7 +114,7 @@ func (b *idleBody) Read(p []byte) (int, error) {
 
 // watchOnce opens a single SSE connection and processes events until the stream ends or an error occurs.
 // established reports whether a 2xx response was received.
-func (c *Client) watchOnce(ctx context.Context, url string, callback WatchCallback) (established bool, err error) {
+func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCallback) (established bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -135,7 +135,7 @@ func (c *Client) watchOnce(ctx context.Context, url string, callback WatchCallba
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(connCtx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(connCtx, http.MethodGet, rawURL, http.NoBody)
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
@@ -210,7 +210,7 @@ func (c *Client) watchOnce(ctx context.Context, url string, callback WatchCallba
 // Deprecated: use WatchSnapshot.
 func (c *Client) WatchAndDecode(ctx context.Context, configName string, dst interface{}) error {
 	dstVal := reflect.ValueOf(dst)
-	if dstVal.Kind() != reflect.Ptr || dstVal.IsNil() {
+	if dstVal.Kind() != reflect.Pointer || dstVal.IsNil() {
 		return fmt.Errorf("%w: dst must be a non-nil pointer", ErrInvalidResponse)
 	}
 

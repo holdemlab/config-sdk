@@ -96,7 +96,8 @@ make integration
 | `refactor:`                 | Рефакторинг коду                          |
 | `test:`                     | Додавання або зміна тестів                |
 | `chore:`                    | Службові зміни (CI, інструменти)          |
-| `!` або `BREAKING CHANGE`   | Зламна зміна публічного API/поведінки     |
+| `perf:`                     | Оптимізація продуктивності                |
+| footer `BREAKING CHANGE:` (+ `!`) | Зламна зміна публічного API/поведінки |
 
 Типові скоупи: `client`, `transport`, `get`, `watch`, `sse`, `crypto`,
 `snapshot`, `examples`, `ci`, `docs`.
@@ -109,7 +110,6 @@ fix(transport): stop following HTTP redirects
 docs(readme): document WatchIdleTimeout
 test(sse): cover event size limit boundary
 chore(ci): bump golangci-lint to v2.15
-fix(client)!: require https for non-loopback hosts
 ```
 
 ### BREAKING CHANGE
@@ -121,18 +121,20 @@ SDK — публічна бібліотека, тож зламною вважа�
 **wire-формат AES-GCM** (`nonce || ciphertext || tag`, без AAD): його
 змінювати можна лише синхронно із сервером.
 
-Позначаються:
+Позначаються **обов'язково footer-ом** `BREAKING CHANGE:` у тілі коміту
+(після порожнього рядка), а для наочності — ще й `!` після типу/скоупу:
 
-1. **Знаком оклику** після типу/скоупу:
-   ```
-   feat(watch)!: remove deprecated WatchAndDecode
-   ```
-2. **Footer** `BREAKING CHANGE:`:
-   ```
-   refactor(client): validate Host at construction time
+```
+fix(client)!: require https for non-loopback hosts
 
-   BREAKING CHANGE: New returns an error for scheme-less Host values
-   ```
+BREAKING CHANGE: New rejects plain-http Host unless it is loopback
+or Options.AllowInsecureHTTP is set
+```
+
+> ⚠️ **Major-версію піднімає тільки footer.** `auto-tag`
+> (`mathieudutour/github-tag-action`, правила Angular) не розпізнає `!` у
+> заголовку як зламну зміну: `fix!: …` без footer дасть **patch**,
+> `feat!: …` — **minor**. Сам `!` — лише позначка для людей.
 
 ---
 
@@ -247,7 +249,10 @@ gofmt -l . && make lint && make vet && make test && make coverage
 ### Вимоги до PR
 
 1. **Назва** — у форматі Conventional Commits: `feat(scope): description`
-   (при squash-merge вона стане повідомленням коміту в `master` і визначить bump)
+   (при squash-merge вона стане заголовком коміту в `master` і визначить bump).
+   Для зламної зміни footer `BREAKING CHANGE: …` має бути в **тілі
+   squash-коміту** — перевірте поле опису коміту в діалозі merge на GitHub,
+   назви PR для major недостатньо
 2. **Опис** — що зроблено, навіщо, які файли змінено
 3. **Тести** — `make test` і `make coverage` проходять
 4. **Лінтер** — `make lint` — 0 issues
@@ -268,7 +273,8 @@ gofmt -l . && make lint && make vet && make test && make coverage
 ручних дій**:
 
 - рахує bump за Conventional Commits від останнього тега `vX.Y.Z`:
-  `feat` → minor, `fix` → patch, `!`/`BREAKING CHANGE` → major;
+  `feat` → minor, `fix`/`perf`/`revert` → patch, footer `BREAKING CHANGE:`
+  → major (`!` у заголовку без footer major **не** дає, див. розділ 3);
 - коміти інших типів (`docs`, `chore`, …) теж дають **patch**
   (`default_bump: patch`), тобто **кожен** push у `master` створює новий тег;
 - пушить тег і в тому ж job-і створює GitHub Release з автоматично

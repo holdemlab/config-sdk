@@ -27,6 +27,7 @@ type Client struct {
 	retryDelay     time.Duration
 
 	watchIdleTimeout time.Duration // <= 0 disables the watch idle timeout
+	environment      string
 	logger           *slog.Logger
 
 	onError  func(error)
@@ -64,6 +65,7 @@ func New(opts Options) (*Client, error) {
 		retryCount:       opts.RetryCount,
 		retryDelay:       opts.RetryDelay,
 		watchIdleTimeout: opts.WatchIdleTimeout,
+		environment:      opts.Environment,
 		logger:           opts.Logger,
 		onError:          opts.OnError,
 		onChange:         opts.OnChange,
@@ -127,6 +129,7 @@ func (c *Client) Close() error {
 //   - CONFIG_SERVICE_TOKEN
 //   - CONFIG_SERVICE_KEY
 //   - CONFIG_SERVICE_ALLOW_INSECURE_HTTP (optional, boolean; permits plain-http non-loopback hosts)
+//   - CONFIG_SERVICE_ENVIRONMENT (optional; config environment, empty = service default)
 func NewFromEnv() (*Client, error) {
 	allowHTTP, _ := strconv.ParseBool(os.Getenv("CONFIG_SERVICE_ALLOW_INSECURE_HTTP"))
 	return New(Options{
@@ -134,5 +137,6 @@ func NewFromEnv() (*Client, error) {
 		Host:              os.Getenv("CONFIG_SERVICE_HOST"),
 		ServiceToken:      os.Getenv("CONFIG_SERVICE_TOKEN"),
 		EncryptionKey:     os.Getenv("CONFIG_SERVICE_KEY"),
+		Environment:       os.Getenv("CONFIG_SERVICE_ENVIRONMENT"),
 	})
 }

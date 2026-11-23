@@ -1,6 +1,7 @@
 package configsdk
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,10 +11,13 @@ import (
 
 // GetOptions contains optional parameters for fetching a configuration.
 type GetOptions struct {
-	// Environment filters by environment (e.g. "production", "staging").
+	// Environment overrides Options.Environment for this call
+	// (e.g. "production", "staging"). Empty uses the client environment.
 	Environment string
 
 	// Version requests a specific version. 0 means latest.
+	// The encrypted endpoint (GetWithOptions) currently ignores it; use
+	// GetFormattedWithOptions to fetch a specific version.
 	Version int
 }
 
@@ -58,12 +62,17 @@ func (c *Client) GetBytes(ctx context.Context, configName string) ([]byte, error
 }
 
 // GetFormatted fetches a configuration in the specified format (json/yaml/env)
-// without encryption, using the /formatted endpoint.
-// It supports ETag-based conditional requests via the returned ETag value.
+// without encryption, using the /formatted endpoint and the client environment.
 func (c *Client) GetFormatted(ctx context.Context, configName string, format Format) ([]byte, error) {
+	return c.GetFormattedWithOptions(ctx, configName, format, GetOptions{})
+}
+
+// GetFormattedWithOptions is like GetFormatted but also sends the per-call
+// environment and version from opts.
+func (c *Client) GetFormattedWithOptions(ctx context.Context, configName string, format Format, opts GetOptions) ([]byte, error) {
 	path := "/api/v1/service/configs/" + url.PathEscape(configName) + "/formatted"
 
-	query := url.Values{}
+	query := c.query(opts)
 	query.Set("format", string(format))
 	path += "?" + query.Encode()
 
@@ -79,14 +88,7 @@ func (c *Client) GetFormatted(ctx context.Context, configName string, format For
 func (c *Client) getDecryptedBytes(ctx context.Context, configName string, opts GetOptions) ([]byte, error) {
 	path := "/api/v1/service/configs/" + url.PathEscape(configName)
 
-	query := url.Values{}
-	if opts.Environment != "" {
-		query.Set("environment", opts.Environment)
-	}
-	if opts.Version > 0 {
-		query.Set("version", strconv.Itoa(opts.Version))
-	}
-	if encoded := query.Encode(); encoded != "" {
+	if encoded := c.query(opts).Encode(); encoded != "" {
 		path += "?" + encoded
 	}
 
@@ -101,4 +103,16 @@ func (c *Client) getDecryptedBytes(ctx context.Context, configName string, opts 
 	}
 
 	return plaintext, nil
+}
+
+// query builds the env and version parameters; env is the per-call value or the client default.
+func (c *Client) query(opts GetOptions) url.Values {
+	query := url.Values{}
+	if env := cmp.Or(opts.Environment, c.environment); env != "" {
+		query.Set("env", env)
+	}
+	if opts.Version > 0 {
+		query.Set("version", strconv.Itoa(opts.Version))
+	}
+	return query
 }

@@ -56,7 +56,11 @@ Or initialize from environment variables:
 client, err := configsdk.NewFromEnv()
 ```
 
-Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`, and optionally `CONFIG_SERVICE_ALLOW_INSECURE_HTTP` (`true`/`1` permits a plain-http, non-loopback host).
+Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`, and optionally `CONFIG_SERVICE_ALLOW_INSECURE_HTTP` (`true`/`1` permits a plain-http, non-loopback host) and `CONFIG_SERVICE_ENVIRONMENT`.
+
+## Environments
+
+Set `Options.Environment` (or `CONFIG_SERVICE_ENVIRONMENT`) to select the config environment for every call; it is sent as the `env` query parameter. Empty means the service default (`default`). `GetOptions.Environment` overrides it per call. A name that exists only in another environment returns `ErrNotFound`. `Watch` delivers only events of the client environment; use one client per environment.
 
 ## Watch for Changes
 
@@ -76,13 +80,13 @@ current := snap.Load() // safe from any goroutine
 
 `WatchSnapshot` subscribes to SSE events, re-fetches the config on each event and stores it in the `Snapshot` (no initial fetch). `WatchAndDecode` is deprecated and not concurrency-safe: reading `dst` while it runs is a data race.
 
-`Watch` returns the error on 401/403/404 (call it again to keep waiting); other failures reconnect with exponential backoff capped at 30s. If no bytes (including `: ping` comments) arrive for `WatchIdleTimeout` (default 5m, negative disables) the stream is reconnected immediately.
+Only events of the client environment are delivered; the initial `connected` event is ignored. `Watch` returns the error on 401/403/404 (call it again to keep waiting); other failures reconnect with exponential backoff capped at 30s. If no bytes (including `: ping` comments) arrive for `WatchIdleTimeout` (default 5m, negative disables) the stream is reconnected immediately.
 
 For manual event handling:
 
 ```go
 client.Watch(ctx, "my-service", func(event configsdk.ConfigChangeEvent) {
-    fmt.Printf("Config %s updated to version %d\n", event.ConfigName, event.Version)
+    fmt.Printf("Config %s %s in %s\n", event.ConfigName, event.Type, event.Environment)
 })
 ```
 
@@ -102,6 +106,10 @@ Fetch config as JSON, YAML, or ENV (plaintext, no encryption):
 
 ```go
 data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
+
+// with environment and version
+data, err = client.GetFormattedWithOptions(ctx, "my-service", configsdk.FormatJSON,
+    configsdk.GetOptions{Environment: "prod", Version: 4})
 ```
 
 ## API Reference
@@ -118,11 +126,12 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | Method | Description |
 |--------|-------------|
 | `Get(ctx, name, dst)` | Fetch, decrypt, unmarshal into struct |
-| `GetWithOptions(ctx, name, dst, opts)` | Fetch with environment/version filters |
+| `GetWithOptions(ctx, name, dst, opts)` | Fetch with environment override; `Version` is ignored by the encrypted endpoint |
 | `GetRaw(ctx, name)` | Returns `map[string]interface{}` |
 | `GetBytes(ctx, name)` | Returns decrypted JSON bytes |
 | `GetFormatted(ctx, name, format)` | Returns plaintext in json/yaml/env format |
-| `List(ctx)` | List available configurations |
+| `GetFormattedWithOptions(ctx, name, format, opts)` | Like `GetFormatted` with per-call environment and version |
+| `List(ctx)` | List available configurations (one entry per config across environments; names may repeat) |
 
 ### Watch
 
@@ -140,7 +149,7 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | `Options` | Client configuration (Host, ServiceToken, EncryptionKey, ...) |
 | `GetOptions` | Query filters (Environment, Version) |
 | `ConfigInfo` | Config metadata (Name, IsValid, ValidFrom, UpdatedAt) |
-| `ConfigChangeEvent` | SSE event (ConfigName, Version, ChangedBy, Timestamp) |
+| `ConfigChangeEvent` | SSE event (ConfigName, Type, Environment, ChangedBy, Timestamp; Version is always 0) |
 | `WatchCallback` | `func(ConfigChangeEvent)` |
 | `Format` | Output format: `FormatJSON`, `FormatYAML`, `FormatEnv` |
 | `Snapshot[T]` | Generic thread-safe config wrapper |
@@ -175,6 +184,7 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 | `OnChange` | `func(string)` | `nil` | Change callback for watch mode |
 | `AllowInsecureHTTP` | `bool` | `false` | Allow plain-http non-loopback `Host` |
 | `WatchIdleTimeout` | `time.Duration` | `5m` | Reconnect watch after this idle time; negative disables |
+| `Environment` | `string` | `""` (service default) | Config environment sent as `env` |
 
 ## Security Notes
 
@@ -191,6 +201,8 @@ data, err := client.GetFormatted(ctx, "my-service", configsdk.FormatYAML)
 - `Watch` now returns on 401/403/404 instead of retrying forever.
 - Watch reconnects use exponential backoff (cap 30s) and an idle timeout (default 5m).
 - Minimum Go version is 1.26.
+- The environment is now sent as `env` (previously `environment`, which the service ignored).
+- `Watch` filters events by environment and ignores `connected`; `List` reads the `{"data": [...]}` envelope (bare arrays still accepted).
 
 ## Examples
 

@@ -50,7 +50,7 @@ func TestIntegrationE2E(t *testing.T) {
 				{Name: configName, IsValid: true, ValidFrom: time.Now(), UpdatedAt: time.Now()},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(configs)
+			json.NewEncoder(w).Encode(map[string]any{"data": configs})
 
 		case "/api/v1/service/configs/" + configName:
 			// Encrypted config endpoint
@@ -85,15 +85,10 @@ func TestIntegrationE2E(t *testing.T) {
 			// Signal that SSE client is connected
 			sseOnce.Do(func() { close(sseReady) })
 
-			// Send a change event
-			event := ConfigChangeEvent{
-				ConfigName: configName,
-				Version:    2,
-				ChangedBy:  42,
-				Timestamp:  time.Now(),
-			}
-			data, _ := json.Marshal(event)
-			fmt.Fprintf(w, "event: config_change\ndata: %s\n\n", data)
+			// Real service stream: connected, then config_changed with untagged keys
+			fmt.Fprint(w, "event: connected\ndata: {\"config\":\""+configName+"\"}\n\n")
+			fmt.Fprintf(w, "event: config_changed\ndata: %s\n\n",
+				`{"Type":"updated","ConfigID":7,"ConfigName":"`+configName+`","GroupID":3,"Env":"default","ChangedBy":42,"Data":{"host":"x"},"Timestamp":"2026-11-23T10:00:00Z"}`)
 			flusher.Flush()
 
 			// Keep connection open until client disconnects
@@ -208,8 +203,8 @@ func TestIntegrationE2E(t *testing.T) {
 		if event.ConfigName != configName {
 			t.Errorf("event ConfigName = %q, want %q", event.ConfigName, configName)
 		}
-		if event.Version != 2 {
-			t.Errorf("event Version = %d, want 2", event.Version)
+		if event.Type != "updated" {
+			t.Errorf("event Type = %q, want %q", event.Type, "updated")
 		}
 		if event.ChangedBy != 42 {
 			t.Errorf("event ChangedBy = %d, want 42", event.ChangedBy)

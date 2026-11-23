@@ -918,3 +918,268 @@ func TestWatchSnapshot_GetError(t *testing.T) {
 		t.Errorf("snapshot changed on error: %q", got)
 	}
 }
+
+// --- environments / real service stream ---
+
+func typedEvent(typ, data string) string {
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", typ, data)
+}
+
+// rawStreamServer sends raw as-is on every watch connection, then holds it open.
+func rawStreamServer(t *testing.T, raw string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f := startStream(w)
+		fmt.Fprint(w, raw)
+		f.Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// watchCollect watches until the first delivered event (or the deadline) and returns
+// it, plus the OnChange names and OnError errors seen. ok is false if nothing arrived.
+type watchResult struct {
+	first    ConfigChangeEvent
+	ok       bool
+	changed  []string
+	errs     []error
+	logs     string
+	received int
+}
+
+func watchFirst(t *testing.T, raw string, mod func(*Options)) watchResult {
+	t.Helper()
+	srv := rawStreamServer(t, raw)
+	var mu sync.Mutex
+	var res watchResult
+	buf := &lockedBuf{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := newWatchTestClient(t, srv, func(o *Options) {
+		o.Logger = slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		o.OnChange = func(n string) { mu.Lock(); res.changed = append(res.changed, n); mu.Unlock() }
+		o.OnError = func(err error) { mu.Lock(); res.errs = append(res.errs, err); mu.Unlock() }
+		if mod != nil {
+			mod(o)
+		}
+	})
+	_ = c.Watch(ctx, "app", func(ev ConfigChangeEvent) {
+		mu.Lock()
+		res.received++
+		if !res.ok {
+			res.first, res.ok = ev, true
+		}
+		mu.Unlock()
+		cancel() // stop after first delivered event; OnChange for it still runs before Watch returns
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	res.logs = buf.String()
+	return res
+}
+
+func TestWatch_RealServiceStream(t *testing.T) {
+	raw := typedEvent("connected", `{"config":"app"}`) +
+		": ping\n\n" +
+		typedEvent("config_changed", `{"Type":"updated","ConfigID":7,"ConfigName":"app","GroupID":3,"Env":"prod","ChangedBy":42,"Data":{"password":"SECRET"},"Timestamp":"2026-11-23T10:00:00Z"}`)
+	res := watchFirst(t, raw, func(o *Options) { o.Environment = "prod" })
+	if !res.ok {
+		t.Fatal("no event delivered")
+	}
+	ev := res.first
+	wantTS := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	if ev.ConfigName != "app" || ev.Version != 0 || ev.ChangedBy != 42 ||
+		ev.Type != "updated" || ev.Environment != "prod" || !ev.Timestamp.Equal(wantTS) {
+		t.Errorf("event = %+v", ev)
+	}
+	if len(res.errs) != 0 {
+		t.Errorf("OnError called: %v", res.errs)
+	}
+	if len(res.changed) != 1 || res.changed[0] != "app" {
+		t.Errorf("OnChange = %v, want [app]", res.changed)
+	}
+}
+
+func TestWatch_SkipsNonChangeEvents(t *testing.T) {
+	good := typedEvent("config_changed", `{"ConfigName":"second","Env":""}`)
+	for name, first := range map[string]string{
+		"connected":  typedEvent("connected", `{"config":"app"}`),
+		"unknown":    typedEvent("something_else", `{"ConfigName":"first"}`),
+		"bad json":   typedEvent("connected", `not json`), // data of skipped events is never parsed
+		"prefix":     typedEvent("config_changed_v2", `{"ConfigName":"first"}`),
+		"wrong case": typedEvent("Config_Changed", `{"ConfigName":"first"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := watchFirst(t, first+good, nil)
+			if !res.ok || res.first.ConfigName != "second" {
+				t.Fatalf("first delivered = %+v (ok=%v), want second", res.first, res.ok)
+			}
+			if len(res.errs) != 0 {
+				t.Errorf("OnError called: %v", res.errs)
+			}
+			if len(res.changed) != 1 {
+				t.Errorf("OnChange = %v, want exactly one call", res.changed)
+			}
+		})
+	}
+}
+
+func TestWatch_EnvironmentFilter(t *testing.T) {
+	norm := func(s string) string {
+		if s == "" {
+			return "default"
+		}
+		return s
+	}
+	envs := []string{"", "default", "prod"}
+	for _, clientEnv := range envs {
+		for _, evEnv := range envs {
+			t.Run(fmt.Sprintf("client=%q/event=%q", clientEnv, evEnv), func(t *testing.T) {
+				payload := func(name, env string) string {
+					if env == "" {
+						return fmt.Sprintf(`{"ConfigName":%q}`, name)
+					}
+					return fmt.Sprintf(`{"ConfigName":%q,"Env":%q}`, name, env)
+				}
+				// Candidate first, then a guaranteed match; the first delivered tells us
+				// whether the candidate passed the filter.
+				raw := typedEvent("config_changed", payload("candidate", evEnv)) +
+					typedEvent("config_changed", payload("sentinel", norm(clientEnv)))
+				res := watchFirst(t, raw, func(o *Options) { o.Environment = clientEnv })
+				want := "sentinel"
+				if norm(clientEnv) == norm(evEnv) {
+					want = "candidate"
+				}
+				if !res.ok || res.first.ConfigName != want {
+					t.Fatalf("first delivered = %q (ok=%v), want %q", res.first.ConfigName, res.ok, want)
+				}
+				if len(res.errs) != 0 {
+					t.Errorf("OnError called: %v", res.errs)
+				}
+				if len(res.changed) != 1 || res.changed[0] != want {
+					t.Errorf("OnChange = %v, want [%s]", res.changed, want)
+				}
+			})
+		}
+	}
+}
+
+func TestWatch_EnvironmentFilterCaseSensitive(t *testing.T) {
+	raw := typedEvent("config_changed", `{"ConfigName":"first","Env":"PROD"}`) +
+		typedEvent("config_changed", `{"ConfigName":"second","Env":"prod"}`)
+	res := watchFirst(t, raw, func(o *Options) { o.Environment = "prod" })
+	if !res.ok || res.first.ConfigName != "second" {
+		t.Fatalf("first delivered = %+v, want second", res.first)
+	}
+}
+
+func TestWatch_LegacyUntypedSnakeCase(t *testing.T) {
+	res := watchFirst(t, sseEvent(`{"config_name":"legacy","version":3,"changed_by":7}`), nil)
+	if !res.ok || res.first.ConfigName != "legacy" || res.first.ChangedBy != 7 || res.first.Version != 3 {
+		t.Fatalf("event = %+v (ok=%v)", res.first, res.ok)
+	}
+}
+
+func TestWatch_KeyPrecedence(t *testing.T) {
+	for name, tt := range map[string]struct {
+		data string
+		name string
+		by   int
+	}{
+		"real first":   {`{"ConfigName":"a","config_name":"b","ChangedBy":5,"changed_by":6}`, "a", 5},
+		"real last":    {`{"config_name":"b","ConfigName":"a","changed_by":6,"ChangedBy":5}`, "a", 5},
+		"snake only":   {`{"config_name":"b","changed_by":6}`, "b", 6},
+		"empty real":   {`{"ConfigName":"","config_name":"b"}`, "b", 0},
+		"zero real by": {`{"ChangedBy":0,"changed_by":6}`, "", 6},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := watchFirst(t, typedEvent("config_changed", tt.data), nil)
+			if !res.ok || res.first.ConfigName != tt.name || res.first.ChangedBy != tt.by {
+				t.Fatalf("event = %+v (ok=%v), want name=%q by=%d", res.first, res.ok, tt.name, tt.by)
+			}
+		})
+	}
+}
+
+func TestWatch_ParseFailureThenValid(t *testing.T) {
+	raw := typedEvent("config_changed", `{not json`) + typedEvent("config_changed", `{"ConfigName":"ok"}`)
+	res := watchFirst(t, raw, nil)
+	if !res.ok || res.first.ConfigName != "ok" {
+		t.Fatalf("event = %+v (ok=%v), want ok", res.first, res.ok)
+	}
+	if len(res.errs) != 1 || !errors.Is(res.errs[0], ErrUnmarshal) {
+		t.Errorf("errs = %v, want one ErrUnmarshal", res.errs)
+	}
+}
+
+func TestWatch_DataNeverLeaks(t *testing.T) {
+	const marker = "DATA_MARKER_77c1"
+	raw := typedEvent("config_changed", `{"ConfigName":"other","Env":"dev","Data":{"password":"`+marker+`"}}`) + // filtered out
+		typedEvent("config_changed", `{"ConfigName":"bad","Data":{"password":"`+marker+`"} oops`) + // malformed
+		typedEvent("config_changed", `{"ConfigName":"app","Data":{"password":"`+marker+`"}}`) // valid
+	res := watchFirst(t, raw, nil)
+	if !res.ok || res.first.ConfigName != "app" {
+		t.Fatalf("event = %+v (ok=%v)", res.first, res.ok)
+	}
+	if strings.Contains(res.logs, marker) {
+		t.Errorf("Data leaked into logs: %s", res.logs)
+	}
+	for _, err := range res.errs {
+		if strings.Contains(err.Error(), marker) {
+			t.Errorf("Data leaked into OnError: %v", err)
+		}
+	}
+	if len(res.errs) != 1 {
+		t.Errorf("errs = %v, want exactly the malformed-event error", res.errs)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", res.first), marker) {
+		t.Errorf("Data leaked into event: %+v", res.first)
+	}
+}
+
+func TestWatchSnapshot_EnvironmentFilter(t *testing.T) {
+	key, _ := hex.DecodeString(testKeyHex)
+	var gets atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/watch") {
+			f := startStream(w)
+			fmt.Fprint(w, typedEvent("connected", `{"config":"app"}`))
+			fmt.Fprint(w, typedEvent("config_changed", `{"ConfigName":"app","Env":"default"}`))
+			fmt.Fprint(w, typedEvent("config_changed", `{"ConfigName":"app","Env":"prod"}`))
+			f.Flush()
+			<-r.Context().Done()
+			return
+		}
+		gets.Add(1)
+		host := "wrong.example.com"
+		if r.URL.Query().Get("env") == "prod" {
+			host = "prod.example.com"
+		}
+		enc, _ := encrypt([]byte(`{"host":"`+host+`"}`), key)
+		_, _ = w.Write(enc)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	changed := make(chan struct{}, 2)
+	c := newWatchTestClient(t, srv, func(o *Options) {
+		o.Environment = "prod"
+		o.OnChange = func(string) { changed <- struct{}{} } // fires after the snapshot callback
+	})
+	snap := NewSnapshot[snapCfg]()
+	done := make(chan error, 1)
+	go func() { done <- WatchSnapshot(ctx, c, "app", snap) }()
+	waitSignal(t, changed, "prod event")
+	cancel()
+	<-done
+
+	if got := snap.Load().Host; got != "prod.example.com" {
+		t.Errorf("Host = %q, want prod.example.com", got)
+	}
+	if n := gets.Load(); n != 1 {
+		t.Errorf("GET requests = %d, want 1 (default-env event must not trigger a fetch)", n)
+	}
+}

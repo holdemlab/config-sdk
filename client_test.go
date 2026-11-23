@@ -1,6 +1,7 @@
 package configsdk
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -268,5 +269,33 @@ func TestNew_WatchIdleTimeoutDefaults(t *testing.T) {
 		if !tt.want(c.watchIdleTimeout) {
 			t.Errorf("WatchIdleTimeout %v -> %v", tt.in, c.watchIdleTimeout)
 		}
+	}
+}
+
+func TestNewFromEnv_Environment(t *testing.T) {
+	for name, env := range map[string]string{"set": "qa", "unset": ""} {
+		t.Run(name, func(t *testing.T) {
+			srv, got := envServer(t, http.StatusOK, "")
+			t.Setenv("CONFIG_SERVICE_HOST", srv.URL)
+			t.Setenv("CONFIG_SERVICE_TOKEN", "test-token")
+			t.Setenv("CONFIG_SERVICE_KEY", testKeyHex)
+			t.Setenv("CONFIG_SERVICE_ENVIRONMENT", env)
+
+			c, err := NewFromEnv()
+			if err != nil {
+				t.Fatalf("NewFromEnv: %v", err)
+			}
+			var v map[string]any
+			if err := c.Get(context.Background(), "app", &v); err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			want := ""
+			if env != "" {
+				want = "env=" + env
+			}
+			if q := lastQuery(t, got); q != want {
+				t.Errorf("query = %q, want %q", q, want)
+			}
+		})
 	}
 }

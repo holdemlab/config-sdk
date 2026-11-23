@@ -54,6 +54,10 @@ type Options struct {
 	// any bytes on the SSE stream before reconnecting.
 	// 0 = default (5m). Negative = disabled.
 	WatchIdleTimeout time.Duration
+
+	// Environment is the config environment used by every call unless overridden
+	// per call via GetOptions.Environment. Empty means the service default ("default").
+	Environment string
 }
 
 func (o *Options) applyDefaults() {

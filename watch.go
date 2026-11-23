@@ -1,6 +1,7 @@
 package configsdk
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,35 @@ import (
 	"github.com/holdemlab/config-sdk/internal/sse"
 )
 
-const watchMaxBackoff = 30 * time.Second
+const (
+	watchMaxBackoff    = 30 * time.Second
+	defaultEnvironment = "default"
+)
+
+// watchPayload is the wire shape of a config_changed event. It deliberately has
+// no Data field: config-service before v0.9.2 sent the decrypted config there,
+// and the SDK never decodes it.
+type watchPayload struct {
+	Type          string    `json:"Type"`
+	ConfigName    string    `json:"ConfigName"`
+	ConfigNameLow string    `json:"config_name"`
+	Env           string    `json:"Env"`
+	ChangedBy     int       `json:"ChangedBy"`
+	ChangedByLow  int       `json:"changed_by"`
+	Version       int       `json:"Version"`
+	Timestamp     time.Time `json:"Timestamp"`
+}
+
+func (p watchPayload) event() ConfigChangeEvent {
+	return ConfigChangeEvent{
+		ConfigName:  cmp.Or(p.ConfigName, p.ConfigNameLow),
+		Version:     p.Version,
+		ChangedBy:   cmp.Or(p.ChangedBy, p.ChangedByLow),
+		Timestamp:   p.Timestamp,
+		Type:        p.Type,
+		Environment: p.Env,
+	}
+}
 
 // errWatchIdle signals that the connection was idle for too long. Never returned from Watch.
 var errWatchIdle = errors.New("configsdk: watch idle timeout")
@@ -176,12 +205,20 @@ func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCal
 			return true, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 		}
 
+		if ctx.Err() != nil { // cancelled by a callback: drop events already buffered
+			return true, ctx.Err()
+		}
+
 		if event.Data == "" {
 			continue
 		}
 
-		var changeEvent ConfigChangeEvent
-		if err := json.Unmarshal([]byte(event.Data), &changeEvent); err != nil {
+		if event.Type != "" && event.Type != "config_changed" {
+			continue
+		}
+
+		var wire watchPayload
+		if err := json.Unmarshal([]byte(event.Data), &wire); err != nil {
 			c.log().Warn("failed to parse SSE event data",
 				"error", err,
 				"data_len", len(event.Data),
@@ -189,6 +226,15 @@ func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCal
 			if c.onError != nil {
 				c.onError(fmt.Errorf("%w: %v", ErrUnmarshal, err))
 			}
+			continue
+		}
+
+		changeEvent := wire.event()
+		if cmp.Or(changeEvent.Environment, defaultEnvironment) != cmp.Or(c.environment, defaultEnvironment) {
+			c.log().Debug("watch event for other environment skipped",
+				"config", changeEvent.ConfigName,
+				"env", changeEvent.Environment,
+			)
 			continue
 		}
 

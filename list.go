@@ -1,6 +1,7 @@
 package configsdk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,9 +16,23 @@ func (c *Client) List(ctx context.Context) ([]ConfigInfo, error) {
 	}
 
 	var configs []ConfigInfo
-	if err := json.Unmarshal(body, &configs); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '[' {
+		// Bare array, tolerated alongside the {"data": [...]} envelope.
+		if err := json.Unmarshal(trimmed, &configs); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+		}
+		return configs, nil
 	}
 
-	return configs, nil
+	var envelope struct {
+		Data []ConfigInfo `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
+	}
+	if envelope.Data == nil {
+		return nil, fmt.Errorf("%w: missing data", ErrInvalidResponse)
+	}
+
+	return envelope.Data, nil
 }

@@ -326,7 +326,7 @@ func TestRestartOnChange_InvalidResponseErrorsRetried(t *testing.T) {
 			e := newRestartEnv(t)
 			e.setRaw(code, nil)
 			hook := func() {
-				if e.hits.Load() >= 2 {
+				if e.hits.Load() == 2 {
 					e.setHost("new") // the retry (GET #2) sees changed content
 				}
 			}
@@ -594,31 +594,64 @@ func TestRestartOnChange_BackoffWaitNoTightLoop(t *testing.T) { // T23
 	}
 }
 
-func TestRestartOnChange_NewerEventSupersedesBackoff(t *testing.T) { // T24
+// T24: an event during a backoff wait does not replace or shorten it.
+func TestRestartOnChange_EventDoesNotShortenBackoff(t *testing.T) { // T24
 	e := newRestartEnv(t)
-	hook := func() {
-		if e.hits.Load() == 1 {
-			e.setRaw(http.StatusServiceUnavailable, nil)
-		} else {
-			e.setHost("new")
-		}
-	}
-	e.onGet.Store(&hook)
+	e.setRaw(http.StatusServiceUnavailable, nil)
 	mod, errCh := errCollector()
 	c := e.client(t, 20*time.Millisecond, mod)
 	c.retryCount = 0
 	c.retryDelay = 30 * time.Second
-	ctx, _ := safetyCtx(t)
+	ctx, cancel := safetyCtx(t)
 	var restarts atomic.Int32
-	done := e.startRestart(ctx, c, func() { restarts.Add(1) }) // no initial event
+	done := e.startRestart(ctx, c, func() { restarts.Add(1) }) // connect check: failure #1
 	waitErrCh(t, errCh)
 	e.send(rev("updated", 1))
-	wantNil(t, done)
-	wantHits(t, e, 2)
-	wantRestarts(t, &restarts, 1)
-	if n := len(errCh); n != 0 {
-		t.Errorf("extra OnError calls: %d", n)
+	negativeWait()
+	wantHits(t, e, 1)
+	wantRestarts(t, &restarts, 0)
+	cancel()
+	wantCanceled(t, done)
+	wantHits(t, e, 1)
+}
+
+// A burst of events during a backoff wait yields exactly one GET, and only
+// after the full backoff (one-sided lower bound: level 1 is >= retryDelay).
+func TestRestartOnChange_BurstDuringBackoffOneGet(t *testing.T) {
+	const retryDelay = 200 * time.Millisecond
+	e := newRestartEnv(t)
+	e.setRaw(http.StatusServiceUnavailable, nil)
+	at := e.recordArrivals()
+	hook := e.onGet.Load()
+	wrapped := func() {
+		(*hook)()
+		if e.hits.Load() == 2 {
+			e.setHost("old") // equal to current: no restart
+		}
 	}
+	e.onGet.Store(&wrapped)
+	mod, errCh := errCollector()
+	c := e.client(t, 10*time.Millisecond, mod)
+	c.retryCount = 0
+	c.retryDelay = retryDelay
+	ctx, _ := safetyCtx(t)
+	var restarts atomic.Int32
+	done := e.startRestart(ctx, c, func() { restarts.Add(1) })
+	waitSignal(t, e.hitCh, "GET #1")
+	waitErrCh(t, errCh)
+	e.send(rev("updated", 1), rev("updated", 2), rev("updated", 3))
+	waitSignal(t, e.hitCh, "GET #2")
+	if gap := at(2).Sub(at(1)); gap < retryDelay {
+		t.Errorf("gap between GET #1 and #2 = %v, want >= %v (event shortened the backoff)", gap, retryDelay)
+	}
+	negativeWait()
+	wantHits(t, e, 2) // the burst was covered by GET #2
+	wantRestarts(t, &restarts, 0)
+	e.setHost("new")
+	e.send(rev("updated", 4)) // still alive: a later event is handled normally
+	wantNil(t, done)
+	wantRestarts(t, &restarts, 1)
+	wantHits(t, e, 3)
 }
 
 func TestRestartOnChange_CallbackNotBlockedByFetch_StopInFlight(t *testing.T) { // T25
@@ -666,25 +699,16 @@ func TestRestartOnChange_CallbackNotBlockedByFetch_StopInFlight(t *testing.T) { 
 	}
 }
 
-// T26: a newer event replaces the backoff wait but must not reset the
-// consecutive-failure counter, so the second failure waits the level-2 backoff
-// (watchBackoffDelay: [2*base, 3*base)), not level 1 ([base, 1.5*base)).
-// The event is sent only after GET #1 was observed and its failure reported, so
-// it always supersedes the backoff wait of failure #1. The assertion is a
-// one-sided lower bound on server-side arrival times (timers never fire early);
-// it does not depend on scheduling speed, only on the counter logic.
+// T26: events sent during backoff waits neither shorten them nor reset the
+// consecutive-failure counter: GET #1 -> #2 waits level 1 (>= retryDelay) and
+// GET #2 -> #3 waits level 2 (watchBackoffDelay: [2*base, 3*base)). Events are
+// sent only after the preceding failure was reported. The assertions are
+// one-sided lower bounds on server-side arrival times (timers never fire early).
 func TestRestartOnChange_BackoffNotResetByEvent(t *testing.T) { // T26
 	const retryDelay = 200 * time.Millisecond
 	e := newRestartEnv(t)
 	e.setRaw(http.StatusServiceUnavailable, nil)
-	var mu sync.Mutex
-	arrival := map[int32]time.Time{}
-	hook := func() {
-		mu.Lock()
-		arrival[e.hits.Load()] = time.Now()
-		mu.Unlock()
-	}
-	e.onGet.Store(&hook)
+	at := e.recordArrivals()
 	mod, errCh := errCollector()
 	c := e.client(t, 10*time.Millisecond, mod)
 	c.retryCount = 0
@@ -694,14 +718,15 @@ func TestRestartOnChange_BackoffNotResetByEvent(t *testing.T) { // T26
 	done := e.startRestart(ctx, c, func() { restarts.Add(1) }) // connect check: failure #1
 	waitSignal(t, e.hitCh, "GET #1")
 	waitErrCh(t, errCh)
-	e.send(rev("updated", 1)) // supersedes the backoff; failure #2
+	e.send(rev("updated", 1)) // must not shorten the backoff
 	waitSignal(t, e.hitCh, "GET #2")
 	waitErrCh(t, errCh)
+	e.send(rev("updated", 2)) // must not shorten the backoff, nor reset the counter
 	waitSignal(t, e.hitCh, "GET #3")
-	mu.Lock()
-	gap := arrival[3].Sub(arrival[2])
-	mu.Unlock()
-	if gap < 2*retryDelay {
+	if gap := at(2).Sub(at(1)); gap < retryDelay {
+		t.Errorf("gap between GET #1 and #2 = %v, want >= %v (event shortened the backoff)", gap, retryDelay)
+	}
+	if gap := at(3).Sub(at(2)); gap < 2*retryDelay {
 		t.Errorf("gap between GET #2 and #3 = %v, want >= %v (failure counter was reset)", gap, 2*retryDelay)
 	}
 	cancel()
@@ -883,8 +908,8 @@ func TestRestartOnChange_BackoffNotResetByNonTransientError(t *testing.T) {
 	// GET #1 -> 503 (failure 1, level-1 backoff pending)
 	waitSignal(t, e.hitCh, "GET #1")
 	waitErrCh(t, errCh)
-	e.send(rev("updated", 1)) // supersedes the backoff
-	// GET #2 -> 404: not retried, must NOT reset the counter
+	e.send(rev("updated", 1)) // does not shorten the backoff; the retry covers it
+	// GET #2 (after the backoff) -> 404: not retried, must NOT reset the counter
 	waitSignal(t, e.hitCh, "GET #2")
 	if err := waitErrCh(t, errCh); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("OnError got %v, want ErrNotFound", err)
@@ -895,8 +920,11 @@ func TestRestartOnChange_BackoffNotResetByNonTransientError(t *testing.T) {
 	waitErrCh(t, errCh)
 	waitSignal(t, e.hitCh, "GET #4")
 	mu.Lock()
-	gap := arrival[4].Sub(arrival[3])
+	gap, gap12 := arrival[4].Sub(arrival[3]), arrival[2].Sub(arrival[1])
 	mu.Unlock()
+	if gap12 < retryDelay {
+		t.Errorf("gap between GET #1 and #2 = %v, want >= %v (event shortened the backoff)", gap12, retryDelay)
+	}
 	if gap < 2*retryDelay {
 		t.Errorf("gap between GET #3 and #4 = %v, want >= %v (counter reset by permanent error)", gap, 2*retryDelay)
 	}

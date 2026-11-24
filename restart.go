@@ -50,15 +50,16 @@ var errNilRestart = errors.New("configsdk: restart must be non-nil")
 // cause exactly one more check.
 //
 // A failed fetch never restarts the service; every failed attempt is logged
-// and reported via Options.OnError. Every error except ErrNotFound,
-// ErrUnauthorized, ErrForbidden, ErrDecryptionFailed, ErrUnmarshal and
-// ErrResponseTooLarge is retried automatically with the Watch reconnect
-// backoff (exponential from Options.RetryDelay, capped at 30s) until it
-// succeeds, a newer change event or reconnect arrives (which starts a fresh
-// debounce window), ctx is cancelled or the Client is closed. Consecutive
-// failures keep increasing the backoff, even across new events, until a fetch
-// succeeds. The listed errors are not retried: the service keeps running and
-// the next change event or reconnect triggers a new check.
+// and reported via Options.OnError (also from RestartOnChange's own
+// goroutine). Every error except ErrNotFound, ErrUnauthorized, ErrForbidden,
+// ErrDecryptionFailed, ErrUnmarshal and ErrResponseTooLarge is retried
+// automatically with the Watch reconnect backoff (exponential from
+// Options.RetryDelay, capped at 30s) until it succeeds, ctx is cancelled or
+// the Client is closed. Change events or reconnects during a backoff wait do
+// not shorten it: the retry covers them. Consecutive failures keep increasing
+// the backoff until a fetch succeeds.
+// The listed errors are not retried: the service keeps running and the next
+// change event or reconnect triggers a new check.
 //
 // It returns nil after restart was called (even if ctx was cancelled
 // concurrently). Otherwise it returns the error of Watch without calling
@@ -87,11 +88,9 @@ func RestartOnChange[T any](ctx context.Context, c *Client, configName string, c
 		var window, deferred <-chan time.Time
 		var lastOK time.Time // last successful fetch; owned by this goroutine
 		var failures int
-		var backoff bool // window is a backoff wait, not a debounce
 		schedule := func() {
-			if window == nil || backoff {
+			if window == nil {
 				window = time.After(c.restartDelay())
-				backoff = false
 			}
 		}
 		for {
@@ -112,7 +111,7 @@ func RestartOnChange[T any](ctx context.Context, c *Client, configName string, c
 				deferred = nil
 				schedule()
 			case <-window:
-				window, backoff = nil, false
+				window = nil
 				select { // a token already queued precedes this fetch, which covers it
 				case <-check:
 				default:
@@ -129,7 +128,7 @@ func RestartOnChange[T any](ctx context.Context, c *Client, configName string, c
 					if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrForbidden) &&
 						!errors.Is(err, ErrDecryptionFailed) && !errors.Is(err, ErrUnmarshal) && !errors.Is(err, ErrResponseTooLarge) {
 						failures++
-						window, backoff = time.After(c.watchBackoffDelay(failures)), true
+						window = time.After(c.watchBackoffDelay(failures))
 					}
 					continue
 				}

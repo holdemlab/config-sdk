@@ -48,7 +48,10 @@ type Options struct {
 	// Logger is an optional structured logger. If nil, logging is disabled.
 	Logger *slog.Logger
 
-	// OnError is called when an error occurs in watch mode. Optional.
+	// OnError is called when an error occurs in watch mode. Optional. It may be
+	// called concurrently from several goroutines (Watch, WatchSnapshot,
+	// RestartOnChange, several watches on one Client) and must be safe for
+	// concurrent use.
 	OnError func(error)
 
 	// OnChange is called when a configuration changes in watch mode. Optional.

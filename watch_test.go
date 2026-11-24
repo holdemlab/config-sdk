@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1181,5 +1182,71 @@ func TestWatchSnapshot_EnvironmentFilter(t *testing.T) {
 	}
 	if n := gets.Load(); n != 1 {
 		t.Errorf("GET requests = %d, want 1 (default-env event must not trigger a fetch)", n)
+	}
+}
+
+func TestWatch_V0110Payload(t *testing.T) {
+	raw := typedEvent("config_changed", `{"type":"updated","config_id":42,"config_name":"db","env":"production","version":3,"changed_by":5,"timestamp":"2026-11-23T10:00:00Z"}`)
+	res := watchFirst(t, raw, func(o *Options) { o.Environment = "production" })
+	if !res.ok {
+		t.Fatal("no event delivered")
+	}
+	ev := res.first
+	wantTS := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	if ev.ConfigName != "db" || ev.Version != 3 || ev.ChangedBy != 5 ||
+		ev.Type != "updated" || ev.Environment != "production" || !ev.Timestamp.Equal(wantTS) {
+		t.Errorf("event = %+v", ev)
+	}
+	if len(res.errs) != 0 {
+		t.Errorf("OnError called: %v", res.errs)
+	}
+	if len(res.changed) != 1 || res.changed[0] != "db" {
+		t.Errorf("OnChange = %v, want [db]", res.changed)
+	}
+}
+
+// W1: onConnect fires once per 2xx stream (never for non-2xx), before the
+// stream's events; the nil-hook path is covered by all other Watch tests.
+func TestWatch_OnConnectHook(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch attempts.Add(1) {
+		case 1:
+			w.WriteHeader(http.StatusInternalServerError)
+		case 2:
+			startStream(w) // established, then the handler returns: clean EOF
+		default:
+			f := startStream(w)
+			fmt.Fprint(w, sseEvent(evJSON))
+			f.Flush()
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := newWatchTestClient(t, srv, nil)
+	var mu sync.Mutex
+	var got []string
+	record := func(s string) {
+		mu.Lock()
+		got = append(got, s)
+		mu.Unlock()
+	}
+	err := c.watch(ctx, "app", func(ConfigChangeEvent) {
+		record("event")
+		cancel()
+	}, func() { record("connect") })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("watch = %v, want context.Canceled", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"connect", "connect", "event"}; !slices.Equal(got, want) {
+		t.Errorf("sequence = %v, want %v", got, want)
+	}
+	if n := attempts.Load(); n != 3 {
+		t.Errorf("server attempts = %d, want 3", n)
 	}
 }

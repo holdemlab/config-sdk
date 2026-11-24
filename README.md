@@ -90,6 +90,36 @@ client.Watch(ctx, "my-service", func(event configsdk.ConfigChangeEvent) {
 })
 ```
 
+## Restart on Change
+
+`RestartOnChange` unifies the "restart the service when its config changes" pattern: it watches the config, and when the content really differs from the value the service started with (and the new config decrypts and decodes), it calls `restart` exactly once and returns `nil`.
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+var cfg Config
+if err := client.Get(ctx, "billing", &cfg); err != nil {
+    log.Fatal(err)
+}
+
+go func() {
+    if err := configsdk.RestartOnChange(ctx, client, "billing", cfg, stop); err != nil && !errors.Is(err, context.Canceled) {
+        log.Printf("config watch stopped: %v", err)
+    }
+}()
+
+<-ctx.Done() // then shut down gracefully and exit; the orchestrator starts the process again
+```
+
+- The SDK only decides when to restart; `restart` (here `stop`) triggers the service's normal graceful shutdown.
+- The process exits with code 0, so the orchestrator's restart policy must restart on a clean exit: Docker `restart: unless-stopped` or `always` (not `on-failure`), Kubernetes Deployments (default `restartPolicy: Always`). Otherwise exit with a non-zero code after shutdown.
+- A check (fetch and compare) runs every time the watch stream connects or reconnects, including the first connection, and on every change event except `deleted`. Reconnect checks are rate-limited to one per 30s after a successful check: a reconnect inside that window postpones its check until the window ends, so a change made during an SSE gap is always noticed (at most ~30s later).
+- Checks are debounced (2s plus up to 2s of random jitter, so replicas do not restart at the same instant); a burst of events causes one fetch.
+- `current` must be decoded by `Get` into a zero value of `T` (`var cfg T; client.Get(ctx, name, &cfg)`) with the client's environment (`Options.Environment` / `CONFIG_SERVICE_ENVIRONMENT`), not by `GetWithOptions` with a per-call `Environment`: `RestartOnChange` always checks the client environment. Do not pre-fill the value before `Get`. A copy you modify must not share maps, slices or pointers with `current`: decode a second value with another `Get` (or deep-copy); a plain assignment shares them. If `current` was modified, the first check after the watch connects restarts the service, on every start. Values are compared with `reflect.DeepEqual`: unexported fields count, and a config that holds a NaN float or a non-nil func field never compares equal, so it has the same effect.
+- A failed check never restarts the service; every failed attempt is reported via `Options.OnError`. Every error except `ErrNotFound`, `ErrUnauthorized`, `ErrForbidden`, `ErrDecryptionFailed`, `ErrUnmarshal` and `ErrResponseTooLarge` is retried automatically with exponential backoff (from `RetryDelay`, capped at 30s) until the fetch succeeds; events or reconnects during a backoff wait do not shorten it, the retry covers them; consecutive failures keep increasing the backoff until a fetch succeeds. The listed errors are not retried: the service keeps running and the next change event or reconnect triggers a new check.
+- Returns `ctx.Err()` when `ctx` is cancelled, `context.Canceled` after `Client.Close()`, and the sentinel error (`ErrUnauthorized`/`ErrForbidden`/`ErrNotFound`) on 401/403/404, without calling `restart`.
+
 ## Thread-Safe Snapshot
 
 ```go
@@ -139,6 +169,7 @@ data, err = client.GetFormattedWithOptions(ctx, "my-service", configsdk.FormatJS
 |--------|-------------|
 | `Watch(ctx, name, callback)` | Subscribe to SSE change events |
 | `WatchSnapshot(ctx, client, name, snap)` | Auto-update a `Snapshot[T]` on changes |
+| `RestartOnChange(ctx, client, name, current, restart)` | Call `restart` once when the config content really changes |
 | `WatchAndDecode(ctx, name, dst)` | Deprecated: auto-update struct (not concurrency-safe) |
 | `Close()` | Close client and all SSE connections |
 
@@ -149,7 +180,7 @@ data, err = client.GetFormattedWithOptions(ctx, "my-service", configsdk.FormatJS
 | `Options` | Client configuration (Host, ServiceToken, EncryptionKey, ...) |
 | `GetOptions` | Query filters (Environment, Version) |
 | `ConfigInfo` | Config metadata (Name, IsValid, ValidFrom, UpdatedAt) |
-| `ConfigChangeEvent` | SSE event (ConfigName, Type, Environment, ChangedBy, Timestamp; Version is always 0) |
+| `ConfigChangeEvent` | SSE event (ConfigName, Type, Environment, Version, ChangedBy, Timestamp; Version is the config version, 0 from config-service before v0.11.0) |
 | `WatchCallback` | `func(ConfigChangeEvent)` |
 | `Format` | Output format: `FormatJSON`, `FormatYAML`, `FormatEnv` |
 | `Snapshot[T]` | Generic thread-safe config wrapper |
@@ -180,7 +211,7 @@ data, err = client.GetFormattedWithOptions(ctx, "my-service", configsdk.FormatJS
 | `RetryCount` | `int` | `3` | Retry attempts for 5xx/network errors |
 | `RetryDelay` | `time.Duration` | `1s` | Base retry delay (exponential backoff) |
 | `Logger` | `*slog.Logger` | `nil` (disabled) | Structured logger |
-| `OnError` | `func(error)` | `nil` | Error callback for watch mode |
+| `OnError` | `func(error)` | `nil` | Error callback for watch mode; may be called concurrently, must be safe for concurrent use |
 | `OnChange` | `func(string)` | `nil` | Change callback for watch mode |
 | `AllowInsecureHTTP` | `bool` | `false` | Allow plain-http non-loopback `Host` |
 | `WatchIdleTimeout` | `time.Duration` | `5m` | Reconnect watch after this idle time; negative disables |

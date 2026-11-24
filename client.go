@@ -28,7 +28,11 @@ type Client struct {
 
 	watchIdleTimeout time.Duration // <= 0 disables the watch idle timeout
 	environment      string
-	logger           *slog.Logger
+	restartDebounce  time.Duration // RestartOnChange debounce window
+	restartJitter    time.Duration // upper bound (exclusive) of the random addition to the window
+	// restartConnectCooldown: a connect trigger within this of a successful fetch is postponed until it ends; <= 0 disables.
+	restartConnectCooldown time.Duration
+	logger                 *slog.Logger
 
 	onError  func(error)
 	onChange func(configName string)
@@ -66,10 +70,14 @@ func New(opts Options) (*Client, error) {
 		retryDelay:       opts.RetryDelay,
 		watchIdleTimeout: opts.WatchIdleTimeout,
 		environment:      opts.Environment,
-		logger:           opts.Logger,
-		onError:          opts.OnError,
-		onChange:         opts.OnChange,
-		closeCh:          make(chan struct{}),
+		restartDebounce:  defaultRestartDebounce,
+		restartJitter:    defaultRestartJitter,
+
+		restartConnectCooldown: defaultRestartConnectCooldown,
+		logger:                 opts.Logger,
+		onError:                opts.OnError,
+		onChange:               opts.OnChange,
+		closeCh:                make(chan struct{}),
 	}, nil
 }
 

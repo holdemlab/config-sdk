@@ -33,7 +33,7 @@ type WatchCallback func(event ConfigChangeEvent)
 type ConfigChangeEvent struct {
 	// ConfigName is the name of the changed configuration.
 	ConfigName string `json:"config_name"`
-	// Version is the new configuration version number. Always 0 with the current service.
+	// Version is the configuration version after the change; 0 from config-service before v0.11.0.
 	Version int `json:"version"`
 	// ChangedBy is the ID of the user who made the change.
 	ChangedBy int `json:"changed_by"`

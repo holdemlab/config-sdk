@@ -73,6 +73,13 @@ func (c *Client) watchBackoffDelay(failures int) time.Duration {
 // (the error is then returned; call Watch again to keep waiting).
 // Other failures reconnect automatically with exponential backoff capped at 30s.
 func (c *Client) Watch(ctx context.Context, configName string, callback WatchCallback) error {
+	return c.watch(ctx, configName, callback, nil)
+}
+
+// watch is Watch plus onConnect, which is called on the watch goroutine every
+// time a stream is established (2xx response), before any event of that
+// stream is delivered. onConnect may be nil and must not block.
+func (c *Client) watch(ctx context.Context, configName string, callback WatchCallback, onConnect func()) error {
 	path := "/api/v1/service/configs/" + url.PathEscape(configName) + "/watch"
 	target := c.host + path
 
@@ -90,7 +97,7 @@ func (c *Client) Watch(ctx context.Context, configName string, callback WatchCal
 
 	failures := 0
 	for {
-		established, err := c.watchOnce(watchCtx, target, callback)
+		established, err := c.watchOnce(watchCtx, target, callback, onConnect)
 		switch {
 		case watchCtx.Err() != nil:
 			return watchCtx.Err()
@@ -143,7 +150,7 @@ func (b *idleBody) Read(p []byte) (int, error) {
 
 // watchOnce opens a single SSE connection and processes events until the stream ends or an error occurs.
 // established reports whether a 2xx response was received.
-func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCallback) (established bool, err error) {
+func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCallback, onConnect func()) (established bool, err error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -182,6 +189,9 @@ func (c *Client) watchOnce(ctx context.Context, rawURL string, callback WatchCal
 
 	if err := mapStatusError(resp.StatusCode); err != nil {
 		return false, err
+	}
+	if onConnect != nil {
+		onConnect()
 	}
 
 	var body io.Reader = resp.Body

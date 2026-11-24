@@ -12,6 +12,13 @@ const (
 	defaultRetryDelay     = 1 * time.Second
 
 	defaultWatchIdleTimeout = 5 * time.Minute
+
+	defaultRestartDebounce = 2 * time.Second
+	defaultRestartJitter   = 2 * time.Second
+
+	// defaultRestartConnectCooldown: a reconnect this soon after a successful
+	// RestartOnChange check postpones its check until this much time has passed.
+	defaultRestartConnectCooldown = 30 * time.Second
 )
 
 // Options contains the configuration for connecting to Config Service.

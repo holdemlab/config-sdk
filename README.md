@@ -56,7 +56,7 @@ Or initialize from environment variables:
 client, err := configsdk.NewFromEnv()
 ```
 
-Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY`, and optionally `CONFIG_SERVICE_ALLOW_INSECURE_HTTP` (`true`/`1` permits a plain-http, non-loopback host) and `CONFIG_SERVICE_ENVIRONMENT`.
+Reads `CONFIG_SERVICE_HOST`, `CONFIG_SERVICE_TOKEN`, `CONFIG_SERVICE_KEY` (each may instead be given as `CONFIG_SERVICE_TOKEN_FILE` / `CONFIG_SERVICE_KEY_FILE`, a path to a file such as a Docker/Kubernetes secret; setting both a variable and its `_FILE` variant is an error, and trailing newlines in the file are stripped), and optionally `CONFIG_SERVICE_ALLOW_INSECURE_HTTP` (`true`/`1` permits a plain-http, non-loopback host) and `CONFIG_SERVICE_ENVIRONMENT`.
 
 ## Environments
 

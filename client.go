@@ -3,6 +3,7 @@ package configsdk
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -134,17 +135,49 @@ func (c *Client) Close() error {
 
 // NewFromEnv creates a new Client using environment variables:
 //   - CONFIG_SERVICE_HOST
-//   - CONFIG_SERVICE_TOKEN
-//   - CONFIG_SERVICE_KEY
+//   - CONFIG_SERVICE_TOKEN or CONFIG_SERVICE_TOKEN_FILE (path to a file with the token)
+//   - CONFIG_SERVICE_KEY or CONFIG_SERVICE_KEY_FILE (path to a file with the key)
 //   - CONFIG_SERVICE_ALLOW_INSECURE_HTTP (optional, boolean; permits plain-http non-loopback hosts)
 //   - CONFIG_SERVICE_ENVIRONMENT (optional; config environment, empty = service default)
+//
+// Setting both a variable and its _FILE variant is an error. File contents
+// have trailing CR/LF removed.
 func NewFromEnv() (*Client, error) {
+	token, err := envOrFile("CONFIG_SERVICE_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+	key, err := envOrFile("CONFIG_SERVICE_KEY")
+	if err != nil {
+		return nil, err
+	}
 	allowHTTP, _ := strconv.ParseBool(os.Getenv("CONFIG_SERVICE_ALLOW_INSECURE_HTTP"))
 	return New(Options{
 		AllowInsecureHTTP: allowHTTP,
 		Host:              os.Getenv("CONFIG_SERVICE_HOST"),
-		ServiceToken:      os.Getenv("CONFIG_SERVICE_TOKEN"),
-		EncryptionKey:     os.Getenv("CONFIG_SERVICE_KEY"),
+		ServiceToken:      token,
+		EncryptionKey:     key,
 		Environment:       os.Getenv("CONFIG_SERVICE_ENVIRONMENT"),
 	})
+}
+
+// envOrFile returns the value of the environment variable name, or, when
+// name+"_FILE" is set, the contents of that file with trailing CR/LF removed.
+func envOrFile(name string) (string, error) {
+	val, path := os.Getenv(name), os.Getenv(name+"_FILE")
+	if val != "" && path != "" {
+		return "", errors.New("configsdk: " + name + " and " + name + "_FILE are mutually exclusive")
+	}
+	if path == "" {
+		return val, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("configsdk: read %s_FILE: %w", name, err)
+	}
+	s := strings.TrimRight(string(b), "\r\n")
+	if s == "" {
+		return "", errors.New("configsdk: " + name + "_FILE is empty")
+	}
+	return s, nil
 }
